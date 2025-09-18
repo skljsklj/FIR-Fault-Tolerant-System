@@ -8,6 +8,8 @@ set_property board_part digilentinc.com:zybo:part0:2.0 [current_project]
 
 add_files -norecurse hdl/util_pkg.vhd
 add_files -norecurse hdl/txt_util.vhd
+add_files -norecurse hdl/mac.vhd
+add_files -norecurse hdl/mac_triplex_duplex.vhd
 
 update_compile_order -fileset sources_1
 
@@ -18,6 +20,6 @@ add_files -fileset constrs_1 -norecurse constraint/clock_constraint.xdc
 # add_files -fileset sim_1 -norecurse ../waveform_tb_behav.wcfg
 
 update_compile_order -fileset sources_1
-set_property target_language VHDL [current_project]
+set_property target_language Verilog [current_project]
 # update_compile_order -fileset sim_1
 
