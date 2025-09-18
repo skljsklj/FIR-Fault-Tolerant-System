@@ -123,24 +123,25 @@ begin
         for i in 0 to number_of_voters_for_one_tdr-1 generate
         process(pair_out)
         begin
-            data_o_pair(i) <= (pair_out(i*3) and pair_out(i*3+1)) or
-                            (pair_out(i*3+1) and pair_out(i*3+2)) or
-                            (pair_out(i*3+2) and pair_out(i*3));
+            data_o_pair(j*3 + i) <= (pair_out(j*3+i) and pair_out(j*3+i+1)) or
+                                    (pair_out(j*3+i+1) and pair_out(j*3+i+2)) or
+                                    (pair_out(j*3+i+2) and pair_out(j*3+i));
 
-            data_o_spare(i) <= (pair_out(i*3) and pair_out(i*3+1)) or
-                            (pair_out(i*3+1) and pair_out(i*3+2)) or
-                            (pair_out(i*3+2) and pair_out(i*3));
+            data_o_spare(j*3 + i) <= (pair_out(j*3+i) and pair_out(j*3+i+1)) or
+                                     (pair_out(j*3+i+1) and pair_out(j*3+i+2)) or
+                                     (pair_out(j*3+i+2) and pair_out(j*3+i));
 
-            if data_o_pair(i) /= data_o_spare(i) then
-                error_bit(i) <= '1';
+            if data_o_pair(j*3 + i) /= data_o_spare(j*3 + i) then
+                error_bit(j*3 + i) <= '1';
             else
-                error_bit(i) <= '0';
+                error_bit(j*3 + i) <= '0';
             end if;
 
-                data_to_switch(i) <= data_o_pair(i) & error_bit(i);
+                data_to_switch(j*3 + i) <= data_o_pair(j*3 + i) & error_bit(j*3 + i);
             end process;
         end generate;
     end generate;
+
 
     data_to_mux_1(0) <=  data_to_switch(0);
     assigning_value_for_mux1: 
