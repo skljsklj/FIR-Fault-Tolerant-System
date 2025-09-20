@@ -10,6 +10,7 @@ add_files -norecurse hdl/util_pkg.vhd
 add_files -norecurse hdl/txt_util.vhd
 add_files -norecurse hdl/mac.vhd
 add_files -norecurse hdl/mac_triplex_duplex.vhd
+add_files -norecurse hdl/tb.vhd
 
 update_compile_order -fileset sources_1
 
