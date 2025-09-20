@@ -5,23 +5,24 @@ use work.util_pkg.all;
 
 entity mac_triplex_duplex is
     generic(
-        fir_ord                         : natural := 5;      -- number of taps
+        fir_ord                         : natural := 20;      -- FIR order (taps = fir_ord+1)
         input_data_width                : natural := 24;
         -- number of pair-and-a-spare voter instances per TDR (e.g. 4 or 5)
         number_of_voters_for_one_tdr    : natural := 4;
-        output_data_width               : natural := 48       -- default 2*input width
+        output_data_width               : natural := 24       -- default 2*input width
     );
     Port (
         clk_i       : in  std_logic;
         coef_addr_i : in  std_logic_vector(log2c(fir_ord)-1 downto 0);
         coef_i      : in  std_logic_vector(input_data_width-1 downto 0);
         data_i      : in  std_logic_vector(input_data_width-1 downto 0);
+        we_i        : in  std_logic; 
         data_o      : out std_logic_vector(output_data_width-1 downto 0)
     );
 end mac_triplex_duplex;
 
 architecture Behavioral of mac_triplex_duplex is
-    type std_2d is array (0 to fir_ord*6-1) of std_logic_vector(2*input_data_width-1 downto 0);
+    type std_2d is array (fir_ord*6 downto 0) of std_logic_vector(2*input_data_width-1 downto 0);
     type std_2d_pairs is array (0 to fir_ord*3-1) of std_logic_vector(2*input_data_width-1 downto 0);
     -- voted outputs per stage (flattened across voters and stages)
     type voters_flat_t is array (0 to (number_of_voters_for_one_tdr*fir_ord)-1)
@@ -30,7 +31,8 @@ architecture Behavioral of mac_triplex_duplex is
     type switch_line_t is array (natural range <>) of std_logic_vector(2*input_data_width downto 0);
     type error_bits_t is array (natural range <>) of std_logic;
 
-    type coef_t is array (0 to fir_ord-1) of std_logic_vector(input_data_width-1 downto 0);
+    -- store fir_ord+1 coefficients; TB addresses 0..fir_ord
+    type coef_t is array (0 to fir_ord) of std_logic_vector(input_data_width-1 downto 0);
     signal b_s : coef_t := (others => (others => '0'));
 
     constant total_num_of_voters : natural := number_of_voters_for_one_tdr * fir_ord; -- total across all stages
@@ -76,38 +78,40 @@ begin
     process(clk_i)
     begin
         if rising_edge(clk_i) then
-            b_s(to_integer(unsigned(coef_addr_i))) <= coef_i;
+            if we_i = '1' then
+                b_s(to_integer(unsigned(coef_addr_i))) <= coef_i;
+            end if;            
         end if;
     end process;
+    
+    mac_first :
+    for i in 0 to 5 generate
+        mac_instance:
+        entity work.mac(behavioral)
+        generic map(input_data_width=>input_data_width)
+        port map(clk_i=>clk_i,
+                 u_i=>data_i,
+                 -- first stage uses the last coefficient (reverse order)
+                 b_i=>b_s(fir_ord),
+                 sec_i=>(others=>'0'),
+                 sec_o=>mac_out(0+i));
+        end generate mac_first;
 
-    triplex_gen:
-    for j in 0 to fir_ord-1 generate
+    others_section:
+    for j in 1 to fir_ord-1 generate
         triplex_instance:
         for i in 0 to 5 generate
-            mac_first: if j = 0 generate
-                mac_instance:
-                entity work.mac(behavioral)
-                generic map(input_data_width=>input_data_width)
-                port map(clk_i=>clk_i,
-                         u_i=>data_i,
-                         b_i=>b_s(0),
-                         sec_i=>(others=>'0'),
-                         sec_o=>mac_out(0+i));
-            end generate mac_first;
-    
-            mac_others: if j /= 0 generate
-                mac_instance:
-                entity work.mac(behavioral)
-                generic map(input_data_width=>input_data_width)
-                port map(clk_i=>clk_i,
-                         u_i=>data_i,
-                         b_i=>b_s(j),
-                         sec_i=>stage_selected(j-1), -- izlaz iz switch-a prethodnog TDR-a
-                         sec_o=>mac_out(j*6+i));
-            end generate mac_others;
-    
-        end generate triplex_instance;
-    end generate;
+            mac_others:
+            entity work.mac(behavioral)
+            generic map(input_data_width=>input_data_width)
+            port map(clk_i=>clk_i,
+                     u_i=>data_i,
+                     -- subsequent stages use reversed coefficient index
+                     b_i=>b_s(fir_ord - j),
+                     sec_i=>mac_out((j-1)*6+i), -- izlaz iz switch-a prethodnog TDR-a
+                     sec_o=>mac_out(j*6+i));
+            end generate triplex_instance;
+        end generate others_section;
     
     -- Duplex voting for each pair (0,1), (2,3), (4,5)
     process(clk_i)
@@ -139,7 +143,6 @@ begin
     for j in 0 to fir_ord - 1 generate
         voter_logic:
         for i in 0 to number_of_voters_for_one_tdr-1 generate
-        begin
             -- bitwise majority of the three pair outputs; duplicated N times per stage (pair and spare voters)
             data_o_pair(j*number_of_voters_for_one_tdr + i)  <= (pair_out(j*3+0) and pair_out(j*3+1)) or
                                                                 (pair_out(j*3+1) and pair_out(j*3+2)) or
@@ -149,17 +152,17 @@ begin
                                                                 (pair_out(j*3+1) and pair_out(j*3+2)) or
                                                                 (pair_out(j*3+2) and pair_out(j*3+0));
 
-            if data_o_pair(j*number_of_voters_for_one_tdr + i) /= data_o_spare(j*number_of_voters_for_one_tdr + i) then
-                error_bit(j*number_of_voters_for_one_tdr + i) <= '1';
-            else
-                error_bit(j*number_of_voters_for_one_tdr + i) <= '0';
-            end if;
+            -- concurrent conditional assignment for error flag
+            error_bit(j*number_of_voters_for_one_tdr + i) <= '1'
+                when data_o_pair(j*number_of_voters_for_one_tdr + i) /=
+                     data_o_spare(j*number_of_voters_for_one_tdr + i)
+                else '0';
 
             -- bundle data and error for per-stage switch (LSB = error)
             data_to_switch(j*number_of_voters_for_one_tdr + i) <= data_o_pair(j*number_of_voters_for_one_tdr + i) &
                                                                   error_bit(j*number_of_voters_for_one_tdr + i);
-        end generate;
-    end generate;
+        end generate voter_logic;
+    end generate voter_logic_per_tdr;
 
     -- per-TDR multiplexers: select within the j-th stage voter set
     mux_per_stage:
@@ -240,8 +243,11 @@ begin
         end process;
     end generate;
 
-    -- final output is the last stage selected value
-    data_outt_s <= stage_selected(fir_ord-1);
-    data_o <= std_logic_vector(resize(signed(data_outt_s), output_data_width));
+    process(clk_i)
+    begin
+        if rising_edge(clk_i) then
+            data_o <= stage_selected(fir_ord-1)(2*input_data_width-2 downto 2*input_data_width-output_data_width-1);
+        end if;
+    end process;
 
 end Behavioral;
