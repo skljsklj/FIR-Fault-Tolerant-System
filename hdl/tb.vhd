@@ -15,9 +15,12 @@ end tb;
 architecture Behavioral of tb is
     constant period : time := 20 ns;
     signal clk_i_s : std_logic;
-    file input_test_vector : text open read_mode is "C:\Users\DK\Documents\Downloads\Vezba-8\vezba8\dizajn_fajlovi\param_fir\matlab\input.txt";
-    file output_check_vector : text open read_mode is "C:\Users\DK\Documents\Downloads\Vezba-8\vezba8\dizajn_fajlovi\param_fir\matlab\expected.txt";
-    file input_coef : text open read_mode is "C:\Users\DK\Documents\Downloads\Vezba-8\vezba8\dizajn_fajlovi\param_fir\matlab\coef.txt";
+    -- Use paths relative to the simulator run directory.
+    -- Vivado xsim runs in vivado_project/fir_fault_tolerant_system.sim/sim_1/behav/xsim,
+    -- from where HDL sources are referenced as ../../../../../hdl/...
+    file input_test_vector    : text open read_mode is "../../../../../hdl/input.txt";
+    file output_check_vector  : text open read_mode is "../../../../../hdl/expected.txt";
+    file input_coef           : text open read_mode is "../../../../../hdl/coef.txt";
     signal data_i_s : std_logic_vector(in_out_data_width-1 downto 0);
     signal data_o_s : std_logic_vector(in_out_data_width-1 downto 0);
     signal coef_addr_i_s : std_logic_vector(log2c(fir_ord)-1 downto 0);
