@@ -22,10 +22,14 @@ entity mac_triplex_duplex is
 end mac_triplex_duplex;
 
 architecture Behavioral of mac_triplex_duplex is
-    type std_2d is array (fir_ord*6 downto 0) of std_logic_vector(2*input_data_width-1 downto 0);
-    type std_2d_pairs is array (0 to fir_ord*3-1) of std_logic_vector(2*input_data_width-1 downto 0);
+    -- total number of MAC stages = fir_ord + 1 (taps)
+    constant num_stages : natural := fir_ord + 1;
+    -- 6 replicas per stage
+    type std_2d is array (0 to num_stages*6-1) of std_logic_vector(2*input_data_width-1 downto 0);
+    -- 3 pairs per stage
+    type std_2d_pairs is array (0 to num_stages*3-1) of std_logic_vector(2*input_data_width-1 downto 0);
     -- voted outputs per stage (flattened across voters and stages)
-    type voters_flat_t is array (0 to (number_of_voters_for_one_tdr*fir_ord)-1)
+    type voters_flat_t is array (0 to (number_of_voters_for_one_tdr*num_stages)-1)
         of std_logic_vector(2*input_data_width-1 downto 0);
     -- generic unconstrained array for switch lines (data + error bit)
     type switch_line_t is array (natural range <>) of std_logic_vector(2*input_data_width downto 0);
@@ -35,7 +39,7 @@ architecture Behavioral of mac_triplex_duplex is
     type coef_t is array (0 to fir_ord) of std_logic_vector(input_data_width-1 downto 0);
     signal b_s : coef_t := (others => (others => '0'));
 
-    constant total_num_of_voters : natural := number_of_voters_for_one_tdr * fir_ord; -- total across all stages
+    constant total_num_of_voters : natural := number_of_voters_for_one_tdr * num_stages; -- total across all stages
 
     signal mac_out  : std_2d := (others => (others => '0'));
     signal pair_out : std_2d_pairs := (others => (others => '0'));
@@ -48,23 +52,23 @@ architecture Behavioral of mac_triplex_duplex is
 
     -- two selected lines
     -- per-TDR selector signals (two channels) sized by number_of_voters_for_one_tdr
-    type sel_arr is array (0 to fir_ord-1) of std_logic_vector(log2c(number_of_voters_for_one_tdr)-1 downto 0);
+    type sel_arr is array (0 to num_stages-1) of std_logic_vector(log2c(number_of_voters_for_one_tdr)-1 downto 0);
     signal sel_data_1 : sel_arr := (others => std_logic_vector(to_unsigned(0, log2c(number_of_voters_for_one_tdr))));
     signal sel_data_2 : sel_arr := (others => std_logic_vector(to_unsigned(1, log2c(number_of_voters_for_one_tdr))));
 
     -- per-TDR mux outputs and selected data
-    type mux_word_arr is array (0 to fir_ord-1) of std_logic_vector(2*input_data_width downto 0);
-    type stage_vec is array (0 to fir_ord-1) of std_logic_vector(2*input_data_width-1 downto 0);
+    type mux_word_arr is array (0 to num_stages-1) of std_logic_vector(2*input_data_width downto 0);
+    type stage_vec is array (0 to num_stages-1) of std_logic_vector(2*input_data_width-1 downto 0);
     signal data_from_mux_1 : mux_word_arr := (others => (others => '0'));
     signal data_from_mux_2 : mux_word_arr := (others => (others => '0'));
     signal data_from_mux_s : stage_vec := (others => (others => '0'));
 
     signal error_bit : error_bits_t(0 to total_num_of_voters-1) := (others => '0');
 
-    type errcmp_arr is array (0 to fir_ord-1) of std_logic;
+    type errcmp_arr is array (0 to num_stages-1) of std_logic;
     signal error_from_comparator : errcmp_arr := (others => '0');
     -- per-TDR counters sized by voters-per-TDR
-    type cnt_arr is array (0 to fir_ord-1) of unsigned(log2c(number_of_voters_for_one_tdr)-1 downto 0);
+    type cnt_arr is array (0 to num_stages-1) of unsigned(log2c(number_of_voters_for_one_tdr)-1 downto 0);
     signal counter   : cnt_arr := (others => to_unsigned(2, log2c(number_of_voters_for_one_tdr)));
     constant max_index : unsigned (log2c(number_of_voters_for_one_tdr)-1 downto 0) :=
         to_unsigned(number_of_voters_for_one_tdr-1, log2c(number_of_voters_for_one_tdr));
@@ -97,8 +101,9 @@ begin
                  sec_o=>mac_out(0+i));
         end generate mac_first;
 
+    -- Remaining stages 1..fir_ord (inclusive) to cover all taps
     others_section:
-    for j in 1 to fir_ord-1 generate
+    for j in 1 to fir_ord generate
         triplex_instance:
         for i in 0 to 5 generate
             mac_others:
@@ -108,39 +113,24 @@ begin
                      u_i=>data_i,
                      -- subsequent stages use reversed coefficient index
                      b_i=>b_s(fir_ord - j),
-                     sec_i=>mac_out((j-1)*6+i), -- izlaz iz switch-a prethodnog TDR-a
+                     sec_i=>stage_selected(j-1), -- izlaz iz switch-a prethodnog TDR-a
                      sec_o=>mac_out(j*6+i));
             end generate triplex_instance;
         end generate others_section;
     
-    -- Duplex voting for each pair (0,1), (2,3), (4,5)
-    process(clk_i)
-    begin
-        if rising_edge(clk_i) then
-            for j in 0 to fir_ord-1 loop
-                if mac_out(j*6+0) = mac_out(j*6+1) then
-                    pair_out(j*3+0) <= mac_out(j*6+0);
-                else
-                    pair_out(j*3+0) <= (others => '0');
-                end if;
-
-                if mac_out(j*6+2) = mac_out(j*6+3) then
-                    pair_out(j*3+1) <= mac_out(j*6+2);
-                else
-                    pair_out(j*3+1) <= (others => '0');
-                end if;
-
-                if mac_out(j*6+4) = mac_out(j*6+5) then
-                    pair_out(j*3+2) <= mac_out(j*6+4);
-                else
-                    pair_out(j*3+2) <= (others => '0');
-                end if;
-            end loop;
-        end if;
-    end process;
+    -- Duplex voting for each pair (0,1), (2,3), (4,5) - combinational
+    pair_vote_per_stage:
+    for j in 0 to num_stages-1 generate
+        pair0:
+        pair_out(j*3+0) <= mac_out(j*6+0) when mac_out(j*6+0) = mac_out(j*6+1) else (others => '0');
+        pair1:
+        pair_out(j*3+1) <= mac_out(j*6+2) when mac_out(j*6+2) = mac_out(j*6+3) else (others => '0');
+        pair2:
+        pair_out(j*3+2) <= mac_out(j*6+4) when mac_out(j*6+4) = mac_out(j*6+5) else (others => '0');
+    end generate pair_vote_per_stage;
     
     voter_logic_per_tdr:
-    for j in 0 to fir_ord - 1 generate
+    for j in 0 to num_stages - 1 generate
         voter_logic:
         for i in 0 to number_of_voters_for_one_tdr-1 generate
             -- bitwise majority of the three pair outputs; duplicated N times per stage (pair and spare voters)
@@ -166,7 +156,7 @@ begin
 
     -- per-TDR multiplexers: select within the j-th stage voter set
     mux_per_stage:
-    for j in 0 to fir_ord-1 generate
+    for j in 0 to num_stages-1 generate
         data_from_mux_1(j) <= data_to_switch(j*number_of_voters_for_one_tdr +
                                              to_integer(unsigned(sel_data_1(j))));
         data_from_mux_2(j) <= data_to_switch(j*number_of_voters_for_one_tdr +
@@ -176,7 +166,7 @@ begin
     --error detection from comparator 
     -- error detection per TDR
     err_detect:
-    for j in 0 to fir_ord-1 generate
+    for j in 0 to num_stages-1 generate
         process(clk_i)
         begin
             if rising_edge(clk_i) then
@@ -192,7 +182,7 @@ begin
     --counter logic for cell in mux 
     -- per-TDR counter/selector rotation
     rotate_select:
-    for j in 0 to fir_ord-1 generate
+    for j in 0 to num_stages-1 generate
         process(clk_i)
         begin
             if rising_edge(clk_i) then
@@ -215,38 +205,25 @@ begin
         end process;
     end generate;
 
-    -- choose non-erroneous path per stage
+    -- choose non-erroneous path per stage - combinational
     choose_good:
-    for j in 0 to fir_ord-1 generate
-        process(clk_i)
-        begin
-            if rising_edge(clk_i) then
-                if data_from_mux_1(j)(0) = '0' then
-                    data_from_mux_s(j) <= data_from_mux_1(j)(2*input_data_width downto 1);
-                elsif data_from_mux_2(j)(0) = '0' then
-                    data_from_mux_s(j) <= data_from_mux_2(j)(2*input_data_width downto 1);
-                else
-                    data_from_mux_s(j) <= (others => '0');
-                end if;
-            end if;
-        end process;
+    for j in 0 to num_stages-1 generate
+        data_from_mux_s(j) <= data_from_mux_1(j)(2*input_data_width downto 1) when data_from_mux_1(j)(0) = '0' else
+                               data_from_mux_2(j)(2*input_data_width downto 1) when data_from_mux_2(j)(0) = '0' else
+                               (others => '0');
     end generate;
     
-    -- register per-stage selected output for chaining
-    stage_reg:
-    for j in 0 to fir_ord-1 generate
-        process(clk_i)
-        begin
-            if rising_edge(clk_i) then
-                stage_selected(j) <= data_from_mux_s(j);
-            end if;
-        end process;
+    -- combinational per-stage selected output for chaining into next MAC
+    stage_sel_comb:
+    for j in 0 to num_stages-1 generate
+        stage_selected(j) <= data_from_mux_s(j);
     end generate;
 
     process(clk_i)
     begin
         if rising_edge(clk_i) then
-            data_o <= stage_selected(fir_ord-1)(2*input_data_width-2 downto 2*input_data_width-output_data_width-1);
+            -- scale to Q(1, input_data_width-1): take [2*W-2 : 2*W-output_W-1]
+            data_o <= stage_selected(fir_ord)(2*input_data_width-2 downto 2*input_data_width-output_data_width-1);
         end if;
     end process;
 

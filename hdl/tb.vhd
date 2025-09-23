@@ -26,6 +26,7 @@ architecture Behavioral of tb is
     signal coef_addr_i_s : std_logic_vector(log2c(fir_ord)-1 downto 0);
     signal coef_i_s : std_logic_vector(in_out_data_width-1 downto 0);
     signal we_i_s : std_logic;
+    signal tmp : std_logic_vector(in_out_data_width-1 downto 0);
     
     signal start_check : std_logic := '0';
 
@@ -80,16 +81,50 @@ begin
     check_process:
     process
         variable check_v : line;
-        variable tmp : std_logic_vector(in_out_data_width-1 downto 0);
+        -- FIFO za poravnavanje ocekivanog izlaza sa latencijom cevi
+        -- procena detaljnije: 2 ciklusa do stage_selected(0) (pair_out + choose_good + stage_reg = 3, ali mac_out koristi reg_s od prethodnog takta),
+        -- pa +3 ciklusa po narednom TDR-u => ukupno 2 + 3*fir_ord
+        constant PIPELINE_DELAY : natural := 2 + 3*fir_ord;
+        type fifo_t is array (0 to PIPELINE_DELAY-1) of std_logic_vector(in_out_data_width-1 downto 0);
+        variable q : fifo_t := (others => (others => '0'));
+        variable wr : natural := 0;         -- pozicija za upis (i najstariji element za poredjenje pre upisa)
+        variable filled : natural := 0;     -- broj popunjenih mesta
+        variable exp_sample : std_logic_vector(in_out_data_width-1 downto 0);
     begin
         wait until start_check = '1';
         while(true)loop
             wait until rising_edge(clk_i_s);
-            readline(output_check_vector,check_v);
-            tmp := to_std_logic_vector(string(check_v));
-            if(abs(signed(tmp) - signed(data_o_s)) > "000000000000000000000111")then
-                -- report "result mismatch!" severity failure;
+
+            -- prvo (ako je FIFO pun) uporedi NAJSTARIJI element koji ce biti prepisan
+            -- Prikazi u talasima koji uzorak bi se poredio (najstariji u FIFO)
+            if filled > 0 then
+                tmp <= q(wr);
+            else
+                tmp <= (others => '0');
             end if;
+
+            -- Poredi tek kada je FIFO potpuno popunjen (validno poravnanje)
+            if filled = PIPELINE_DELAY then
+                if(abs(signed(q(wr)) - signed(data_o_s)) > "000000000000000000000111")then
+                     report "result mismatch!" severity failure;
+                end if;
+            end if;
+
+            -- procitaj sledece ocekivanje i upisi u FIFO
+            if not endfile(output_check_vector) then
+                readline(output_check_vector,check_v);
+                exp_sample := to_std_logic_vector(string(check_v));
+            else
+                exp_sample := (others => '0');
+            end if;
+            -- za waveform prikaz (neporavnat, ali nije nula)
+            tmp <= exp_sample;
+            q(wr) := exp_sample;
+
+            if filled < PIPELINE_DELAY then
+                filled := filled + 1;
+            end if;
+            wr := (wr + 1) mod PIPELINE_DELAY;
         end loop;
     end process;
     
