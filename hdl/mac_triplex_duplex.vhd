@@ -5,11 +5,11 @@ use work.util_pkg.all;
 
 entity mac_triplex_duplex is
     generic(
-        fir_ord                         : natural := 20;      -- FIR order (taps = fir_ord+1)
+        fir_ord                         : natural := 20;      
         input_data_width                : natural := 24;
         -- number of pair-and-a-spare voter instances per TDR (e.g. 4 or 5)
         number_of_voters_for_one_tdr    : natural := 5;
-        output_data_width               : natural := 24       -- default 2*input width
+        output_data_width               : natural := 24       
     );
     Port (
         clk_i       : in  std_logic;
@@ -22,7 +22,9 @@ entity mac_triplex_duplex is
 end mac_triplex_duplex;
 
 architecture Behavioral of mac_triplex_duplex is
-    -- total number of MAC stages = fir_ord + 1 (taps)
+    attribute resource_sharing : string;
+    attribute resource_sharing of Behavioral : architecture is "no";
+    -- total number of MAC stages = fir_ord + 1
     constant num_stages : natural := fir_ord + 1;
     -- 6 replicas per stage
     type std_2d is array (0 to num_stages*6-1) of std_logic_vector(2*input_data_width-1 downto 0);
@@ -52,7 +54,6 @@ architecture Behavioral of mac_triplex_duplex is
     signal data_to_switch1 : switch_line_t(0 to total_num_of_voters-1) := (others => (others => '0'));
     signal data_to_switch2 : switch_line_t(0 to total_num_of_voters-1) := (others => (others => '0'));
     
-
     -- two selected lines
     -- per-TDR selector signals (two channels) sized by number_of_voters_for_one_tdr
     type sel_arr is array (0 to num_stages-1) of std_logic_vector(log2c(number_of_voters_for_one_tdr)-1 downto 0);
@@ -73,11 +74,20 @@ architecture Behavioral of mac_triplex_duplex is
     -- per-TDR counters sized by voters-per-TDR
     type cnt_arr is array (0 to num_stages-1) of unsigned(log2c(number_of_voters_for_one_tdr)-1 downto 0);
     signal counter   : cnt_arr := (others => to_unsigned(1, log2c(number_of_voters_for_one_tdr)));
-    constant max_index : unsigned (log2c(number_of_voters_for_one_tdr+1)-1 downto 0) :=
+    constant max_index : unsigned (log2c(number_of_voters_for_one_tdr)-1 downto 0) :=
         to_unsigned(number_of_voters_for_one_tdr-1, log2c(number_of_voters_for_one_tdr));
 
     signal data_outt_s : std_logic_vector (2*input_data_width-1 downto 0) := (others => '0');
     signal stage_selected : stage_vec := (others => (others => '0'));
+    
+    attribute dont_touch : string;   
+    -- attribute dont_touch of pair_out : signal is "true"; 
+    -- attribute dont_touch of data_o_pair : signal is "true";                  
+    -- attribute dont_touch of data_o_spare : signal is "true"; 
+    attribute dont_touch of data_to_switch1 : signal is "true";
+    attribute dont_touch of data_to_switch2 : signal is "true";                              
+    attribute dont_touch of sel_data_1 : signal is "true"; 
+    attribute dont_touch of sel_data_2 : signal is "true";
 
 begin
 
@@ -158,8 +168,6 @@ begin
     end generate voter_logic_per_tdr;
 
     -- per-TDR multiplexers: select within the j-th stage voter set
-    
-    -- Prvi MUX prima izlaze svih modula, osim izlaz od drugog modula(1,3,4,5...)
     mux_per_stage:
     for j in 0 to num_stages-1 generate
         data_to_switch1(j*number_of_voters_for_one_tdr) <=  data_to_switch(j*number_of_voters_for_one_tdr);
@@ -167,7 +175,7 @@ begin
         for i in 1 to number_of_voters_for_one_tdr-2 generate
             data_to_switch1(j*number_of_voters_for_one_tdr+i) <=  data_to_switch(j*number_of_voters_for_one_tdr+i+1);
         end generate;
-        -- Drugi MUX prima izlaze svih modula, osim izlaz od prvog modula(2,3,4,5...)
+        
         assigning_value_for_mux2: 
         for i in 0 to number_of_voters_for_one_tdr-2 generate
             data_to_switch2(j*number_of_voters_for_one_tdr+i) <=  data_to_switch(j*number_of_voters_for_one_tdr+i+1);
@@ -180,8 +188,7 @@ begin
         data_from_mux_2(j) <= data_to_switch2(j*number_of_voters_for_one_tdr + to_integer(unsigned(sel_data_2(j))));
     end generate;
     
-    --error detection from comparator 
-    -- error detection per TDR
+    --error detection from comparator per TDR
     err_detect:
     for j in 0 to num_stages-1 generate
         process(clk_i, data_from_mux_1, data_from_mux_2)
@@ -197,7 +204,6 @@ begin
     end generate;
 
     --counter logic for cell in mux 
-    -- per-TDR counter/selector rotation
     rotate_select:
     for j in 0 to num_stages-1 generate
         process(clk_i)
@@ -233,7 +239,6 @@ begin
     process(clk_i)
     begin
         if rising_edge(clk_i) then
-            -- scale to Q(1, input_data_width-1): take [2*W-2 : 2*W-output_W-1]
             data_o <= stage_selected(fir_ord)(2*input_data_width-2 downto 2*input_data_width-output_data_width-1);
         end if;
     end process;
