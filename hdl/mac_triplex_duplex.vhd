@@ -22,8 +22,6 @@ entity mac_triplex_duplex is
 end mac_triplex_duplex;
 
 architecture Behavioral of mac_triplex_duplex is
-    attribute resource_sharing : string;
-    attribute resource_sharing of Behavioral : architecture is "no";
     -- total number of MAC stages = fir_ord + 1
     constant num_stages : natural := fir_ord + 1;
     -- 6 replicas per stage
@@ -80,14 +78,11 @@ architecture Behavioral of mac_triplex_duplex is
     signal data_outt_s : std_logic_vector (2*input_data_width-1 downto 0) := (others => '0');
     signal stage_selected : stage_vec := (others => (others => '0'));
     
-    attribute dont_touch : string;   
-    -- attribute dont_touch of pair_out : signal is "true"; 
-    -- attribute dont_touch of data_o_pair : signal is "true";                  
-    -- attribute dont_touch of data_o_spare : signal is "true"; 
+    attribute dont_touch : string;    
     attribute dont_touch of data_to_switch1 : signal is "true";
     attribute dont_touch of data_to_switch2 : signal is "true";                              
-    attribute dont_touch of sel_data_1 : signal is "true"; 
-    attribute dont_touch of sel_data_2 : signal is "true";
+    --attribute dont_touch of sel_data_1 : signal is "true"; 
+    --attribute dont_touch of sel_data_2 : signal is "true";
 
 begin
 
